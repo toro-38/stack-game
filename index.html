@@ -54,12 +54,26 @@
     pointer-events: auto;
   }
   #mute:active { transform: scale(.92); }
+  #combo {
+    position: absolute; top: 118px; left: 0; right: 0; z-index: 4;
+    text-align: center; pointer-events: none;
+    color: #ffd54a; font-weight: 800; font-size: 30px; letter-spacing: 2px;
+    text-shadow: 0 2px 12px rgba(0,0,0,.5);
+    opacity: 0; transition: opacity .35s;
+  }
+  #combo.pop { animation: comboPop .35s ease-out; }
+  @keyframes comboPop {
+    0%   { transform: scale(.4); }
+    60%  { transform: scale(1.25); }
+    100% { transform: scale(1); }
+  }
 </style>
 </head>
 <body>
 <div id="wrap">
   <canvas id="c"></canvas>
   <button id="mute" aria-label="サウンド切替">🔊</button>
+  <div id="combo"></div>
   <div id="hud">
     <div id="score">0</div>
     <div id="best"></div>
@@ -84,6 +98,7 @@
   const startBtn = document.getElementById('startBtn');
   const hint = document.getElementById('hint');
   const muteBtn = document.getElementById('mute');
+  const comboEl = document.getElementById('combo');
 
   // ----- audio (WebAudio・音声ファイル不要) -----
   let audioCtx = null;
@@ -158,6 +173,7 @@
   let camYCur;
   let running;
   let best = +(localStorage.getItem('stack_best') || 0);
+  let bestHeight = +(localStorage.getItem('stack_best_h') || 0); // 自己ベストの段数
   let particles = [];
   let flash = 0;
   let combo = 0;               // パーフェクト連続数
@@ -172,6 +188,35 @@
     return `hsl(${hue}, 65%, 58%)`;
   }
 
+  // ----- 空（背景）：高く積むほど 夜→夜明け→朝 -----
+  const SKY = [
+    { top: [34, 42, 64],    bot: [17, 20, 31] },    // 夜
+    { top: [86, 64, 120],   bot: [196, 96, 88] },   // 夜明け（紫→橙）
+    { top: [150, 200, 235], bot: [255, 226, 188] },  // 朝
+  ];
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function mix(c1, c2, t) {
+    return `rgb(${Math.round(lerp(c1[0], c2[0], t))},${Math.round(lerp(c1[1], c2[1], t))},${Math.round(lerp(c1[2], c2[2], t))})`;
+  }
+  function skyAt(t) {
+    t = Math.max(0, Math.min(1, t));
+    const seg = t < 0.5 ? 0 : 1;
+    const lt = t < 0.5 ? t / 0.5 : (t - 0.5) / 0.5;
+    const a = SKY[seg], b = SKY[seg + 1];
+    return { top: mix(a.top, b.top, lt), bot: mix(a.bot, b.bot, lt) };
+  }
+
+  // ----- コンボ表示 -----
+  function showCombo(n) {
+    if (n < 2) return;            // 2連続以上で表示
+    comboEl.textContent = 'COMBO ×' + n;
+    comboEl.classList.remove('pop');
+    void comboEl.offsetWidth;     // アニメ再生のためリフロー
+    comboEl.classList.add('pop');
+    comboEl.style.opacity = '1';
+  }
+  function hideCombo() { comboEl.style.opacity = '0'; }
+
   function reset() {
     blocks = [];
     const x0 = (W - BASE_W) / 2;
@@ -182,6 +227,7 @@
     particles = [];
     flash = 0;
     combo = 0;
+    hideCombo();
     spawnMoving();
     running = true;
     scoreEl.textContent = '0';
@@ -220,8 +266,10 @@
       moving.w = last.w;
       flash = 1;
       spawnPerfect(overlapL, screenY(blocks.length), overlap);
-      sndPerfect(combo);
       combo++;
+      sndPerfect(combo - 1);
+      score += combo;            // コンボボーナス（連続が長いほど大きい）
+      showCombo(combo);
     } else {
       // 落ちていく切れ端の破片を飛ばす
       if (moving.x < last.x) {
@@ -233,17 +281,18 @@
       moving.w = overlap;
       combo = 0;
       sndDrop();
+      hideCombo();
     }
 
     blocks.push({ x: moving.x, w: moving.w, colorIdx: moving.colorIdx });
-    score++;
+    score++;                     // 基本点（パーフェクトはボーナスと合算）
     scoreEl.textContent = score;
     hint.style.opacity = 0;
 
     // カメラを1段分上へ
     camY += BLOCK_H;
-    // 少しずつ加速
-    speed = START_SPEED + score * 0.09;
+    // 少しずつ加速（高さ基準）
+    speed = START_SPEED + (blocks.length - 1) * 0.09;
 
     spawnMoving();
   }
@@ -274,9 +323,15 @@
   function gameOver() {
     running = false;
     sndGameOver();
+    hideCombo();
     if (score > best) {
       best = score;
       localStorage.setItem('stack_best', best);
+    }
+    const h = blocks.length - 1;          // 今回の到達段数
+    if (h > bestHeight) {
+      bestHeight = h;
+      localStorage.setItem('stack_best_h', bestHeight);
     }
     bestEl.textContent = best ? 'BEST ' + best : '';
     finalEl.innerHTML = `SCORE <b>${score}</b>　/　BEST <b>${best}</b>`;
@@ -334,12 +389,37 @@
   }
 
   function render() {
-    ctx.clearRect(0, 0, W, H);
+    // 背景：積んだ高さ(カメラ位置)に応じて 夜→朝 へ変化
+    const dayT = camYCur / (BLOCK_H * 50);
+    const sky = skyAt(dayT);
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, sky.top);
+    bg.addColorStop(1, sky.bot);
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
 
     // パーフェクト時の白フラッシュ
     if (flash > 0) {
       ctx.fillStyle = `rgba(255,255,255,${flash * 0.18})`;
       ctx.fillRect(0, 0, W, H);
+    }
+
+    // 自己ベストの到達ライン（超えろ！）
+    if (bestHeight > 0) {
+      const ly = screenY(bestHeight);
+      if (ly > -20 && ly < H + 20) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,.55)';
+        ctx.setLineDash([8, 8]);
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(0, ly); ctx.lineTo(W, ly); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(255,255,255,.8)';
+        ctx.font = '700 13px sans-serif';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText('BEST ' + bestHeight, 12, ly - 5);
+        ctx.restore();
+      }
     }
 
     // 確定ブロック
