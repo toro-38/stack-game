@@ -169,8 +169,8 @@
   let dir;                     // 移動方向
   let speed;
   let score;
-  let camY;                    // カメラの縦オフセット(目標)
-  let camYCur;
+  let camY = 0;                // カメラの縦オフセット(目標)
+  let camYCur = 0;
   let running;
   let best = +(localStorage.getItem('stack_best') || 0);
   let bestHeight = +(localStorage.getItem('stack_best_h') || 0); // 自己ベストの段数
@@ -199,6 +199,7 @@
     return `rgb(${Math.round(lerp(c1[0], c2[0], t))},${Math.round(lerp(c1[1], c2[1], t))},${Math.round(lerp(c1[2], c2[2], t))})`;
   }
   function skyAt(t) {
+    if (!isFinite(t)) t = 0;
     t = Math.max(0, Math.min(1, t));
     const seg = t < 0.5 ? 0 : 1;
     const lt = t < 0.5 ? t / 0.5 : (t - 0.5) / 0.5;
