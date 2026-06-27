@@ -55,7 +55,7 @@
   }
   #mute:active { transform: scale(.92); }
   #combo {
-    position: absolute; top: 118px; left: 0; right: 0; z-index: 4;
+    position: absolute; top: 150px; left: 0; right: 0; z-index: 4;
     text-align: center; pointer-events: none;
     color: #ffd54a; font-weight: 800; font-size: 30px; letter-spacing: 2px;
     text-shadow: 0 2px 12px rgba(0,0,0,.5);
@@ -67,6 +67,22 @@
     60%  { transform: scale(1.25); }
     100% { transform: scale(1); }
   }
+  #meter {
+    position: absolute; top: 108px; left: 50%; transform: translateX(-50%);
+    width: 150px; height: 9px; border-radius: 6px; z-index: 4;
+    background: rgba(255,255,255,.15); overflow: hidden;
+    opacity: 0; transition: opacity .25s; pointer-events: none;
+  }
+  #meter.show { opacity: 1; }
+  #meterFill {
+    height: 100%; width: 100%; transform-origin: left center;
+    background: linear-gradient(90deg, #ffd54a, #ff7a59);
+  }
+  #meterLabel {
+    position: absolute; top: -22px; left: 50%; transform: translateX(-50%);
+    color: #ffd54a; font-weight: 800; font-size: 15px; letter-spacing: 1px;
+    text-shadow: 0 2px 8px rgba(0,0,0,.5); white-space: nowrap;
+  }
 </style>
 </head>
 <body>
@@ -74,6 +90,7 @@
   <canvas id="c"></canvas>
   <button id="mute" aria-label="サウンド切替">🔊</button>
   <div id="combo"></div>
+  <div id="meter"><div id="meterFill"></div><span id="meterLabel"></span></div>
   <div id="hud">
     <div id="score">0</div>
     <div id="best"></div>
@@ -99,6 +116,9 @@
   const hint = document.getElementById('hint');
   const muteBtn = document.getElementById('mute');
   const comboEl = document.getElementById('combo');
+  const meterEl = document.getElementById('meter');
+  const meterFill = document.getElementById('meterFill');
+  const meterLabel = document.getElementById('meterLabel');
 
   // ----- audio (WebAudio・音声ファイル不要) -----
   let audioCtx = null;
@@ -177,6 +197,10 @@
   let particles = [];
   let flash = 0;
   let combo = 0;               // パーフェクト連続数
+  let gauge = 0;               // コンボ倍率ゲージ（残り秒）
+  let shake = 0;               // 画面シェイク量
+  let nowT = 0;                // 現在時刻(ms)・星の瞬き用
+  const GAUGE_MAX = 3.2;       // ゲージ満タンの秒数
 
   bestEl.textContent = best ? 'BEST ' + best : '';
 
@@ -188,23 +212,46 @@
     return `hsl(${hue}, 65%, 58%)`;
   }
 
-  // ----- 空（背景）：高く積むほど 夜→夜明け→朝 -----
+  // ----- 空（背景）：積むほど 夜→朝→昼→夕→夜→宇宙→オーロラ… と無限に巡る -----
   const SKY = [
-    { top: [34, 42, 64],    bot: [17, 20, 31] },    // 夜
-    { top: [86, 64, 120],   bot: [196, 96, 88] },   // 夜明け（紫→橙）
+    { top: [34, 42, 64],    bot: [17, 20, 31] },     // 夜
+    { top: [86, 64, 120],   bot: [196, 96, 88] },    // 夜明け
     { top: [150, 200, 235], bot: [255, 226, 188] },  // 朝
+    { top: [80, 160, 240],  bot: [205, 238, 255] },  // 昼（快晴）
+    { top: [255, 160, 90],  bot: [255, 96, 120] },   // 夕焼け
+    { top: [70, 48, 110],   bot: [150, 64, 120] },   // 夕暮れ
+    { top: [10, 12, 28],    bot: [28, 20, 52] },     // 宇宙（深い夜）
+    { top: [18, 70, 80],    bot: [44, 150, 120] },   // オーロラ
   ];
+  const BIOME_BLOCKS = 12;     // 1つの景色あたりの段数
   function lerp(a, b, t) { return a + (b - a) * t; }
-  function mix(c1, c2, t) {
-    return `rgb(${Math.round(lerp(c1[0], c2[0], t))},${Math.round(lerp(c1[1], c2[1], t))},${Math.round(lerp(c1[2], c2[2], t))})`;
+  function mixArr(c1, c2, t) {
+    return [lerp(c1[0], c2[0], t), lerp(c1[1], c2[1], t), lerp(c1[2], c2[2], t)];
   }
-  function skyAt(t) {
-    if (!isFinite(t)) t = 0;
-    t = Math.max(0, Math.min(1, t));
-    const seg = t < 0.5 ? 0 : 1;
-    const lt = t < 0.5 ? t / 0.5 : (t - 0.5) / 0.5;
-    const a = SKY[seg], b = SKY[seg + 1];
-    return { top: mix(a.top, b.top, lt), bot: mix(a.bot, b.bot, lt) };
+  function rgb(a) { return `rgb(${a[0] | 0},${a[1] | 0},${a[2] | 0})`; }
+  function skyAt(prog) {
+    if (!isFinite(prog)) prog = 0;
+    const n = SKY.length;
+    const fp = ((prog % n) + n) % n;   // 0..n を循環
+    const i = Math.floor(fp), lt = fp - i;
+    const a = SKY[i], b = SKY[(i + 1) % n];
+    return { top: mixArr(a.top, b.top, lt), bot: mixArr(a.bot, b.bot, lt) };
+  }
+  // 暗い空のときに浮かぶ星
+  const stars = [];
+  for (let i = 0; i < 46; i++) {
+    stars.push({ x: Math.random(), y: Math.random() * 0.72, r: Math.random() * 1.4 + 0.4, ph: Math.random() * 6.28 });
+  }
+  function drawStars(dark) {
+    ctx.fillStyle = '#fff';
+    for (const s of stars) {
+      const tw = 0.6 + 0.4 * Math.sin(nowT * 0.002 + s.ph);
+      ctx.globalAlpha = dark * tw * 0.9;
+      ctx.beginPath();
+      ctx.arc(s.x * W, s.y * H, s.r, 0, 6.28);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
   }
 
   // ----- コンボ表示 -----
@@ -218,6 +265,17 @@
   }
   function hideCombo() { comboEl.style.opacity = '0'; }
 
+  // ----- コンボ倍率メーター -----
+  function updateMeter() {
+    if (combo > 0) {
+      meterEl.classList.add('show');
+      meterFill.style.transform = 'scaleX(' + Math.max(0, gauge / GAUGE_MAX) + ')';
+      meterLabel.textContent = '× ' + (1 + combo);
+    } else {
+      meterEl.classList.remove('show');
+    }
+  }
+
   function reset() {
     blocks = [];
     const x0 = (W - BASE_W) / 2;
@@ -228,7 +286,10 @@
     particles = [];
     flash = 0;
     combo = 0;
+    gauge = 0;
+    shake = 0;
     hideCombo();
+    updateMeter();
     spawnMoving();
     running = true;
     scoreEl.textContent = '0';
@@ -266,10 +327,11 @@
       moving.x = last.x;
       moving.w = last.w;
       flash = 1;
-      spawnPerfect(overlapL, screenY(blocks.length), overlap);
       combo++;
+      gauge = GAUGE_MAX;                          // ゲージ満タン
+      shake = Math.min(3 + combo * 1.4, 16);      // コンボが伸びるほど派手に揺れる
+      spawnPerfect(overlapL, screenY(blocks.length), overlap, combo);
       sndPerfect(combo - 1);
-      score += combo;            // コンボボーナス（連続が長いほど大きい）
       showCombo(combo);
     } else {
       // 落ちていく切れ端の破片を飛ばす
@@ -281,13 +343,15 @@
       moving.x = overlapL;
       moving.w = overlap;
       combo = 0;
+      gauge = 0;
       sndDrop();
       hideCombo();
     }
 
     blocks.push({ x: moving.x, w: moving.w, colorIdx: moving.colorIdx });
-    score++;                     // 基本点（パーフェクトはボーナスと合算）
+    score += 1 + combo;          // スコア = 基本点 × 倍率(1+コンボ)
     scoreEl.textContent = score;
+    updateMeter();
     hint.style.opacity = 0;
 
     // カメラを1段分上へ
@@ -303,8 +367,9 @@
     return baseY() - index * BLOCK_H + camYCur;
   }
 
-  function spawnPerfect(x, y, w) {
-    for (let i = 0; i < 14; i++) {
+  function spawnPerfect(x, y, w, combo) {
+    const count = Math.min(14 + combo * 4, 60); // コンボが伸びるほど派手に
+    for (let i = 0; i < count; i++) {
       particles.push({
         x: x + Math.random() * w, y: y + BLOCK_H / 2,
         vx: (Math.random() - .5) * 4, vy: -Math.random() * 4 - 1,
@@ -364,6 +429,15 @@
     }
     particles = particles.filter(p => p.life > 0 && p.y < H + 200);
 
+    // コンボ倍率ゲージは時間で減る。空になったらコンボ途切れ
+    if (combo > 0) {
+      gauge -= f / 60;
+      if (gauge <= 0) { combo = 0; gauge = 0; hideCombo(); }
+      updateMeter();
+    }
+    // 画面シェイク減衰
+    if (shake > 0.2) shake *= Math.pow(0.86, f); else shake = 0;
+
     if (flash > 0) flash -= 0.05 * f;
   }
 
@@ -390,19 +464,28 @@
   }
 
   function render() {
-    // 背景：積んだ高さ(カメラ位置)に応じて 夜→朝 へ変化
-    const dayT = camYCur / (BLOCK_H * 50);
-    const sky = skyAt(dayT);
+    ctx.save();
+    // コンボが伸びるほど画面が揺れる
+    if (shake > 0) ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake);
+
+    // 背景：積むほど景色が無限に巡る
+    const prog = camYCur / (BLOCK_H * BIOME_BLOCKS);
+    const sky = skyAt(prog);
     const bg = ctx.createLinearGradient(0, 0, 0, H);
-    bg.addColorStop(0, sky.top);
-    bg.addColorStop(1, sky.bot);
+    bg.addColorStop(0, rgb(sky.top));
+    bg.addColorStop(1, rgb(sky.bot));
     ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, W, H);
+    ctx.fillRect(-30, -30, W + 60, H + 60);   // シェイクで端が欠けないよう余白込み
+
+    // 暗い空では星が瞬く
+    const brightness = (sky.top[0] + sky.top[1] + sky.top[2]) / 3;
+    const dark = Math.max(0, 1 - brightness / 110);
+    if (dark > 0.04) drawStars(dark);
 
     // パーフェクト時の白フラッシュ
     if (flash > 0) {
       ctx.fillStyle = `rgba(255,255,255,${flash * 0.18})`;
-      ctx.fillRect(0, 0, W, H);
+      ctx.fillRect(-30, -30, W + 60, H + 60);
     }
 
     // 自己ベストの到達ライン（超えろ！）
@@ -455,10 +538,12 @@
       }
     }
     ctx.globalAlpha = 1;
+    ctx.restore();
   }
 
   let lastT = 0;
   function frame(t) {
+    nowT = t;
     if (!lastT) lastT = t;
     let f = (t - lastT) / (1000 / 60);   // 60fps基準の経過フレーム数
     lastT = t;
