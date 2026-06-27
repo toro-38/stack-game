@@ -88,7 +88,7 @@
   // ----- game state -----
   const BLOCK_H = 46;          // 各ブロックの高さ(px)
   const BASE_W = 220;          // 最初のブロックの幅
-  const START_SPEED = 2.2;
+  const START_SPEED = 3.4;
   let blocks = [];             // 確定したブロック {x,w,colorIdx}
   let moving;                  // 動いているブロック
   let dir;                     // 移動方向
@@ -177,7 +177,7 @@
     // カメラを1段分上へ
     camY += BLOCK_H;
     // 少しずつ加速
-    speed = START_SPEED + score * 0.06;
+    speed = START_SPEED + score * 0.09;
 
     spawnMoving();
   }
