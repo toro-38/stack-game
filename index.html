@@ -218,12 +218,12 @@
   }
 
   // ----- loop -----
-  function update() {
-    // カメラ補間
-    camYCur += (camY - camYCur) * 0.12;
+  function update(f) {
+    // カメラ補間（フレームレート非依存）
+    camYCur += (camY - camYCur) * Math.min(1, 0.12 * f);
 
     if (running) {
-      moving.x += dir * speed;
+      moving.x += dir * speed * f;
       const last = blocks[blocks.length - 1];
       // 端で反射（少しはみ出してから折り返す）
       if (dir === 1 && moving.x + moving.w > W + moving.w * 0.15) dir = -1;
@@ -233,15 +233,15 @@
     // パーティクル
     for (const p of particles) {
       if (p.type === 'chunk') {
-        p.vy += 0.6; p.y += p.vy; p.x += p.vx; p.rot += p.vr;
-        p.life -= 0.012;
+        p.vy += 0.6 * f; p.y += p.vy * f; p.x += p.vx * f; p.rot += p.vr * f;
+        p.life -= 0.012 * f;
       } else {
-        p.vy += 0.15; p.x += p.vx; p.y += p.vy; p.life -= 0.03;
+        p.vy += 0.15 * f; p.x += p.vx * f; p.y += p.vy * f; p.life -= 0.03 * f;
       }
     }
     particles = particles.filter(p => p.life > 0 && p.y < H + 200);
 
-    if (flash > 0) flash -= 0.05;
+    if (flash > 0) flash -= 0.05 * f;
   }
 
   function roundRect(x, y, w, h, r) {
@@ -309,12 +309,18 @@
     ctx.globalAlpha = 1;
   }
 
-  function frame() {
-    update();
+  let lastT = 0;
+  function frame(t) {
+    if (!lastT) lastT = t;
+    let f = (t - lastT) / (1000 / 60);   // 60fps基準の経過フレーム数
+    lastT = t;
+    if (!isFinite(f) || f <= 0) f = 1;
+    if (f > 4) f = 4;                     // タブ復帰などの大ジャンプを抑制
+    update(f);
     render();
     requestAnimationFrame(frame);
   }
-  frame();
+  requestAnimationFrame(frame);
 
   // ----- input -----
   function onTap(e) {
