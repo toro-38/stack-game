@@ -45,11 +45,21 @@
   }
   .btn:active { transform: scale(.95); }
   #hint { position:absolute; bottom: 34px; left:0; right:0; text-align:center; color:#fff; opacity:.5; font-size:14px; pointer-events:none; }
+  #mute {
+    position: absolute; top: 22px; right: 18px; z-index: 5;
+    width: 42px; height: 42px; border-radius: 50%;
+    border: none; background: rgba(255,255,255,.12); color: #fff;
+    font-size: 20px; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: auto;
+  }
+  #mute:active { transform: scale(.92); }
 </style>
 </head>
 <body>
 <div id="wrap">
   <canvas id="c"></canvas>
+  <button id="mute" aria-label="サウンド切替">🔊</button>
   <div id="hud">
     <div id="score">0</div>
     <div id="best"></div>
@@ -73,6 +83,56 @@
   const finalEl = document.getElementById('final');
   const startBtn = document.getElementById('startBtn');
   const hint = document.getElementById('hint');
+  const muteBtn = document.getElementById('mute');
+
+  // ----- audio (WebAudio・音声ファイル不要) -----
+  let audioCtx = null;
+  let muted = localStorage.getItem('stack_muted') === '1';
+  function ensureAudio() {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) audioCtx = new AC();
+    }
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  }
+  // 1音を鳴らす汎用関数（エンベロープ付き）
+  function tone({ freq = 440, type = 'sine', dur = 0.12, vol = 0.2, slideTo = null, delay = 0 }) {
+    if (muted || !audioCtx) return;
+    const t0 = audioCtx.currentTime + delay;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+    if (slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(1, slideTo), t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g).connect(audioCtx.destination);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+  }
+  function sndDrop() {
+    tone({ freq: 200, type: 'square', dur: 0.09, vol: 0.16, slideTo: 120 });
+  }
+  function sndPerfect(combo) {
+    // コンボが続くほど音程が半音ずつ上がる（上限あり）
+    const step = Math.min(combo, 14);
+    const base = 660 * Math.pow(2, step / 12);
+    tone({ freq: base, type: 'triangle', dur: 0.14, vol: 0.22 });
+    tone({ freq: base * 1.5, type: 'sine', dur: 0.16, vol: 0.11, delay: 0.02 }); // 5度上で華やかに
+  }
+  function sndGameOver() {
+    tone({ freq: 320, type: 'sawtooth', dur: 0.5, vol: 0.2, slideTo: 90 });
+  }
+  function updateMuteUI() { muteBtn.textContent = muted ? '🔇' : '🔊'; }
+  updateMuteUI();
+  muteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    muted = !muted;
+    localStorage.setItem('stack_muted', muted ? '1' : '0');
+    updateMuteUI();
+    if (!muted) { ensureAudio(); sndDrop(); } // 解除時に確認音
+  });
 
   let W, H, DPR;
   function resize() {
@@ -100,6 +160,7 @@
   let best = +(localStorage.getItem('stack_best') || 0);
   let particles = [];
   let flash = 0;
+  let combo = 0;               // パーフェクト連続数
 
   bestEl.textContent = best ? 'BEST ' + best : '';
 
@@ -120,6 +181,7 @@
     camY = 0; camYCur = 0;
     particles = [];
     flash = 0;
+    combo = 0;
     spawnMoving();
     running = true;
     scoreEl.textContent = '0';
@@ -158,6 +220,8 @@
       moving.w = last.w;
       flash = 1;
       spawnPerfect(overlapL, screenY(blocks.length), overlap);
+      sndPerfect(combo);
+      combo++;
     } else {
       // 落ちていく切れ端の破片を飛ばす
       if (moving.x < last.x) {
@@ -167,6 +231,8 @@
       }
       moving.x = overlapL;
       moving.w = overlap;
+      combo = 0;
+      sndDrop();
     }
 
     blocks.push({ x: moving.x, w: moving.w, colorIdx: moving.colorIdx });
@@ -207,6 +273,7 @@
 
   function gameOver() {
     running = false;
+    sndGameOver();
     if (score > best) {
       best = score;
       localStorage.setItem('stack_best', best);
@@ -325,14 +392,15 @@
   // ----- input -----
   function onTap(e) {
     if (e) e.preventDefault();
+    ensureAudio();
     if (!running) return;
     drop();
   }
   canvas.addEventListener('pointerdown', onTap);
   window.addEventListener('keydown', (e) => {
-    if (e.code === 'Space') { e.preventDefault(); running ? drop() : reset(); }
+    if (e.code === 'Space') { e.preventDefault(); ensureAudio(); running ? drop() : reset(); }
   });
-  startBtn.addEventListener('click', (e) => { e.stopPropagation(); reset(); });
+  startBtn.addEventListener('click', (e) => { e.stopPropagation(); ensureAudio(); reset(); });
 })();
 </script>
 </body>
